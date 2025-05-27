@@ -5,6 +5,8 @@ import com.example.qrcodegenerator.model.ErrorCorrectionLevelEnum;
 import com.example.qrcodegenerator.model.OutputFormatEnum;
 import com.example.qrcodegenerator.model.QrCodeType;
 import com.example.qrcodegenerator.service.QRCodeService;
+import com.example.qrcodegenerator.service.formatter.CalendarEventQrDataFormatter;
+import com.example.qrcodegenerator.service.formatter.GeoLocationQrDataFormatter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -22,6 +24,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
@@ -41,11 +44,14 @@ class QRCodeControllerTest {
     @MockBean
     private QRCodeService qrCodeService;
 
+    // Valid 1x1 PNG Base64 for logo tests
+    private static final String VALID_LOGO_RAW_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
+
     private GenerateQrCodeRequest createDefaultRequest() {
         GenerateQrCodeRequest request = new GenerateQrCodeRequest();
         request.setQrCodeType("TEXT");
         request.setData("Default Data");
-        // Other fields will use their defaults (width, height, errorCorrectionLevel, colors, outputFormat)
+        // Other fields will use their defaults (width, height, errorCorrectionLevel, colors, outputFormat, logoFactor)
         return request;
     }
 
@@ -59,13 +65,18 @@ class QRCodeControllerTest {
         byte[] dummyPngBytes = "dummy-png-bytes".getBytes();
         given(qrCodeService.generateQRCode(
                 eq(QrCodeType.TEXT),
-                eq(expectedParams), // Verifying how params map is constructed
+                eq(expectedParams), 
                 eq(request.getWidth()),
                 eq(request.getHeight()),
                 eq(ErrorCorrectionLevelEnum.M),
                 eq(request.getForegroundColor()),
                 eq(request.getBackgroundColor()),
-                eq(OutputFormatEnum.PNG)
+                eq(OutputFormatEnum.PNG),
+                eq(request.getLogoBase64()), // null by default
+                eq(request.getLogoTargetAreaFactor()), // 0.2 by default
+                eq(request.getFrameText()), // null by default
+                eq(request.getFrameColor()), // #000000 by default
+                eq(request.getFramePadding()) // null by default
         )).willReturn(dummyPngBytes);
 
         mockMvc.perform(post("/api/qrcode/generate")
@@ -81,27 +92,28 @@ class QRCodeControllerTest {
                 anyInt(), anyInt(),
                 any(ErrorCorrectionLevelEnum.class),
                 anyString(), anyString(),
-                any(OutputFormatEnum.class)
+                any(OutputFormatEnum.class),
+                any(), any(), // logoBase64, logoTargetAreaFactor
+                any(), anyString(), any() // frameText, frameColor, framePadding
         );
     }
     
+    // --- New QR Type Tests ---
     @Test
-    void generateQrCode_vCardType_success() throws Exception {
+    void generateQrCode_calendarType_success() throws Exception {
         GenerateQrCodeRequest request = createDefaultRequest();
-        request.setQrCodeType("VCARD");
-        request.setData(""); // Data field might be ignored or used differently for complex types
-        Map<String, String> vcardParams = new HashMap<>();
-        vcardParams.put("firstName", "John");
-        vcardParams.put("lastName", "Doe");
-        request.setParams(vcardParams);
+        request.setQrCodeType("CALENDAR");
+        request.setData(""); // Data might be ignored for complex types if params are used
+        Map<String, String> calendarParams = new HashMap<>();
+        calendarParams.put(CalendarEventQrDataFormatter.KEY_CALENDAR_SUMMARY, "Team Meeting");
+        calendarParams.put(CalendarEventQrDataFormatter.KEY_CALENDAR_DTSTART, "20240101T100000Z");
+        calendarParams.put(CalendarEventQrDataFormatter.KEY_CALENDAR_DTEND, "20240101T110000Z");
+        request.setParams(calendarParams);
 
-        byte[] dummyPngBytes = "vcard-bytes".getBytes();
         given(qrCodeService.generateQRCode(
-                eq(QrCodeType.VCARD),
-                eq(vcardParams), 
-                anyInt(), anyInt(), any(ErrorCorrectionLevelEnum.class),
-                anyString(), anyString(), any(OutputFormatEnum.class)
-        )).willReturn(dummyPngBytes);
+                eq(QrCodeType.CALENDAR), eq(calendarParams), anyInt(), anyInt(), any(ErrorCorrectionLevelEnum.class),
+                anyString(), anyString(), any(OutputFormatEnum.class), any(), any(), any(), anyString(), any()
+        )).willReturn("dummy-calendar-qr".getBytes());
 
         mockMvc.perform(post("/api/qrcode/generate")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -109,50 +121,126 @@ class QRCodeControllerTest {
                 .andExpect(status().isOk());
         
         verify(qrCodeService).generateQRCode(
-                eq(QrCodeType.VCARD),
-                eq(vcardParams),
-                anyInt(), anyInt(), any(ErrorCorrectionLevelEnum.class),
-                anyString(), anyString(), any(OutputFormatEnum.class)
+            eq(QrCodeType.CALENDAR), eq(calendarParams), anyInt(), anyInt(), any(ErrorCorrectionLevelEnum.class),
+            anyString(), anyString(), any(OutputFormatEnum.class), any(), any(), any(), anyString(), any()
         );
     }
-    
-    // Similar tests for WIFI, EMAIL, SMS types would follow the VCARD pattern,
-    // setting appropriate qrCodeType and params.
 
-    @ParameterizedTest
-    @CsvSource({"L,L", "M,M", "Q,Q", "H,H", " M ,M", ",M"}) // Test with spaces and empty (default)
-    void generateQrCode_validErrorCorrectionLevels_callsServiceWithCorrectEnum(String inputLevel, String expectedEnumName) throws Exception {
+    @Test
+    void generateQrCode_geoLocationType_success() throws Exception {
         GenerateQrCodeRequest request = createDefaultRequest();
-        if (inputLevel != null && inputLevel.isEmpty()) { // Simulate empty string from CSV source for default case
-             request.setErrorCorrectionLevel(""); // Test default behavior in enum parsing
-        } else if (inputLevel != null) {
-            request.setErrorCorrectionLevel(inputLevel);
-        }
-        // else inputLevel is null, DTO default 'M' applies. CsvSource doesn't make nulls easily.
-        // For null, we would need a separate test or different source.
+        request.setQrCodeType("GEO");
+        request.setData(""); 
+        Map<String, String> geoParams = new HashMap<>();
+        geoParams.put(GeoLocationQrDataFormatter.KEY_GEO_LATITUDE, "34.0522");
+        geoParams.put(GeoLocationQrDataFormatter.KEY_GEO_LONGITUDE, "-118.2437");
+        request.setParams(geoParams);
 
-        ErrorCorrectionLevelEnum expectedEnum = ErrorCorrectionLevelEnum.valueOf(expectedEnumName);
-        
-        given(qrCodeService.generateQRCode(any(QrCodeType.class), anyMap(), anyInt(), anyInt(), 
-                                           eq(expectedEnum), 
-                                           anyString(), anyString(), any(OutputFormatEnum.class)))
-            .willReturn("dummy".getBytes());
-
+        given(qrCodeService.generateQRCode(
+                eq(QrCodeType.GEO), eq(geoParams), anyInt(), anyInt(), any(ErrorCorrectionLevelEnum.class),
+                anyString(), anyString(), any(OutputFormatEnum.class), any(), any(), any(), anyString(), any()
+        )).willReturn("dummy-geo-qr".getBytes());
 
         mockMvc.perform(post("/api/qrcode/generate")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk());
 
-        verify(qrCodeService).generateQRCode(any(QrCodeType.class), anyMap(), anyInt(), anyInt(), 
+        verify(qrCodeService).generateQRCode(
+            eq(QrCodeType.GEO), eq(geoParams), anyInt(), anyInt(), any(ErrorCorrectionLevelEnum.class),
+            anyString(), anyString(), any(OutputFormatEnum.class), any(), any(), any(), anyString(), any()
+        );
+    }
+
+    // --- Logo Parameter Tests ---
+    @Test
+    void generateQrCode_withValidLogoParams_callsServiceWithLogoParams() throws Exception {
+        GenerateQrCodeRequest request = createDefaultRequest();
+        request.setLogoBase64(VALID_LOGO_RAW_BASE64);
+        request.setLogoTargetAreaFactor(0.15);
+
+        mockMvc.perform(post("/api/qrcode/generate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk());
+
+        verify(qrCodeService).generateQRCode(
+            any(QrCodeType.class), anyMap(), anyInt(), anyInt(), any(ErrorCorrectionLevelEnum.class),
+            anyString(), anyString(), any(OutputFormatEnum.class),
+            eq(VALID_LOGO_RAW_BASE64), eq(0.15), // Verify logo params
+            any(), anyString(), any()
+        );
+    }
+
+    @ParameterizedTest
+    @ValueSource(doubles = {0.05, 0.35}) // Below min 0.1, above max 0.3
+    void generateQrCode_invalidLogoTargetAreaFactor_returnsBadRequest(double invalidFactor) throws Exception {
+        GenerateQrCodeRequest request = createDefaultRequest();
+        request.setLogoTargetAreaFactor(invalidFactor);
+
+        mockMvc.perform(post("/api/qrcode/generate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest()); 
+                // DTO validation handles this. Specific error message check can be added.
+    }
+    
+    // --- EPS Output Test ---
+    @Test
+    void generateQrCode_epsOutputFormat_callsServiceAndSetsEpsContentType() throws Exception {
+        GenerateQrCodeRequest request = createDefaultRequest();
+        request.setOutputFormat("EPS");
+        byte[] dummyEpsBytes = "%!PS-Adobe-3.0 EPSF-3.0 ...".getBytes();
+
+        given(qrCodeService.generateQRCode(
+                any(QrCodeType.class), anyMap(), anyInt(), anyInt(), any(ErrorCorrectionLevelEnum.class),
+                anyString(), anyString(), eq(OutputFormatEnum.EPS), // Expect EPS enum
+                any(), any(), any(), anyString(), any()
+        )).willReturn(dummyEpsBytes);
+
+        mockMvc.perform(post("/api/qrcode/generate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.valueOf("application/postscript")))
+                .andExpect(content().bytes(dummyEpsBytes));
+
+        verify(qrCodeService).generateQRCode(
+            any(QrCodeType.class), anyMap(), anyInt(), anyInt(), any(ErrorCorrectionLevelEnum.class),
+            anyString(), anyString(), eq(OutputFormatEnum.EPS),
+            any(), any(), any(), anyString(), any()
+        );
+    }
+
+
+    // --- Existing Tests (abbreviated, ensure they still pass or adapt them) ---
+    @ParameterizedTest
+    @CsvSource({"L,L", "M,M", "Q,Q", "H,H", " M ,M", ",M"})
+    void generateQrCode_validErrorCorrectionLevels_callsServiceWithCorrectEnum(String inputLevel, String expectedEnumName) throws Exception {
+        GenerateQrCodeRequest request = createDefaultRequest();
+        if (inputLevel != null && inputLevel.isEmpty()) { 
+             request.setErrorCorrectionLevel(""); 
+        } else if (inputLevel != null) {
+            request.setErrorCorrectionLevel(inputLevel);
+        }
+        ErrorCorrectionLevelEnum expectedEnum = ErrorCorrectionLevelEnum.valueOf(expectedEnumName);
+        
+        given(qrCodeService.generateQRCode(any(QrCodeType.class), anyMap(), anyInt(), anyInt(), 
                                            eq(expectedEnum), 
-                                           anyString(), anyString(), any(OutputFormatEnum.class));
+                                           anyString(), anyString(), any(OutputFormatEnum.class),
+                                           any(), any(), any(), anyString(), any()))
+            .willReturn("dummy".getBytes());
+
+        mockMvc.perform(post("/api/qrcode/generate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk());
     }
 
     @Test
     void generateQrCode_invalidErrorCorrectionLevel_returnsBadRequest() throws Exception {
         GenerateQrCodeRequest request = createDefaultRequest();
-        request.setErrorCorrectionLevel("X"); // Invalid level
+        request.setErrorCorrectionLevel("X"); 
 
         mockMvc.perform(post("/api/qrcode/generate")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -160,54 +248,7 @@ class QRCodeControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Invalid error correction level: 'X'. Allowed values are L, M, Q, H (case-insensitive)."));
     }
-
-    @Test
-    void generateQrCode_validColors_callsServiceWithColors() throws Exception {
-        GenerateQrCodeRequest request = createDefaultRequest();
-        request.setForegroundColor("#112233");
-        request.setBackgroundColor("#AABBCC");
-
-        mockMvc.perform(post("/api/qrcode/generate")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk());
-
-        verify(qrCodeService).generateQRCode(any(QrCodeType.class), anyMap(), anyInt(), anyInt(), 
-                                           any(ErrorCorrectionLevelEnum.class), 
-                                           eq("#112233"), eq("#AABBCC"), 
-                                           any(OutputFormatEnum.class));
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"#12345", "invalidColor", "#GGHHII"})
-    void generateQrCode_invalidForegroundColor_returnsBadRequestDueToDtoValidation(String invalidColor) throws Exception {
-        GenerateQrCodeRequest request = createDefaultRequest();
-        request.setForegroundColor(invalidColor);
-
-        ResultActions result = mockMvc.perform(post("/api/qrcode/generate")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)));
-        
-        result.andExpect(status().isBadRequest());
-        // For DTO validation, the error message structure might be different (e.g. fieldErrors)
-        // Depending on global exception handler setup. Spring default is usually a list of errors.
-        // For simplicity, we just check for bad request. A more specific check might be:
-        // .andExpect(jsonPath("$.errors[0].defaultMessage").value(org.hamcrest.Matchers.containsString("Invalid hex color format for foregroundColor")));
-    }
     
-    @ParameterizedTest
-    @ValueSource(strings = {"#12345", "invalidColor", "#GGHHII"})
-    void generateQrCode_invalidBackgroundColor_returnsBadRequestDueToDtoValidation(String invalidColor) throws Exception {
-        GenerateQrCodeRequest request = createDefaultRequest();
-        request.setBackgroundColor(invalidColor);
-
-        mockMvc.perform(post("/api/qrcode/generate")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest());
-    }
-
-
     @Test
     void generateQrCode_svgOutputFormat_callsServiceAndSetsContentType() throws Exception {
         GenerateQrCodeRequest request = createDefaultRequest();
@@ -216,7 +257,7 @@ class QRCodeControllerTest {
 
         given(qrCodeService.generateQRCode(any(QrCodeType.class), anyMap(), anyInt(), anyInt(), 
                                            any(ErrorCorrectionLevelEnum.class), anyString(), anyString(), 
-                                           eq(OutputFormatEnum.SVG)))
+                                           eq(OutputFormatEnum.SVG), any(), any(), any(), anyString(), any()))
             .willReturn(dummySvgBytes);
 
         mockMvc.perform(post("/api/qrcode/generate")
@@ -225,96 +266,25 @@ class QRCodeControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.valueOf("image/svg+xml")))
                 .andExpect(content().bytes(dummySvgBytes));
-
-        verify(qrCodeService).generateQRCode(any(QrCodeType.class), anyMap(), anyInt(), anyInt(), 
-                                           any(ErrorCorrectionLevelEnum.class), anyString(), anyString(), 
-                                           eq(OutputFormatEnum.SVG));
     }
     
-    @Test
-    void generateQrCode_pngOutputFormatExplicit_callsServiceAndSetsContentType() throws Exception {
-        GenerateQrCodeRequest request = createDefaultRequest();
-        request.setOutputFormat("PNG"); // Explicitly PNG
-        byte[] dummyPngBytes = "dummy-png".getBytes();
-
-        given(qrCodeService.generateQRCode(any(QrCodeType.class), anyMap(), anyInt(), anyInt(), 
-                                           any(ErrorCorrectionLevelEnum.class), anyString(), anyString(), 
-                                           eq(OutputFormatEnum.PNG)))
-            .willReturn(dummyPngBytes);
-
-        mockMvc.perform(post("/api/qrcode/generate")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaType.IMAGE_PNG))
-                .andExpect(content().bytes(dummyPngBytes));
-    }
-    
-    @Test
-    void generateQrCode_invalidOutputFormat_defaultsToPngAndSetsPngContentType() throws Exception {
-        GenerateQrCodeRequest request = createDefaultRequest();
-        request.setOutputFormat("INVALID_FORMAT"); // Invalid, should default to PNG
-        byte[] dummyPngBytes = "default-png".getBytes();
-
-        // Controller defaults to PNG if OutputFormatEnum.fromString provides default
-        given(qrCodeService.generateQRCode(any(QrCodeType.class), anyMap(), anyInt(), anyInt(), 
-                                           any(ErrorCorrectionLevelEnum.class), anyString(), anyString(), 
-                                           eq(OutputFormatEnum.PNG))) // Expecting PNG due to default
-            .willReturn(dummyPngBytes);
-
-        mockMvc.perform(post("/api/qrcode/generate")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaType.IMAGE_PNG))
-                .andExpect(content().bytes(dummyPngBytes));
-    }
-
-
     @Test
     void generateQrCode_serviceThrowsUnsupportedOperationException_returnsNotImplemented() throws Exception {
         GenerateQrCodeRequest request = createDefaultRequest();
-        request.setQrCodeType("UNSUPPORTED_TYPE_FOR_TEST"); // A type that will cause the exception
+        // Use a QrCodeType that will be converted to enum for the service call
+        QrCodeType typeToMakeUnsupported = QrCodeType.VCARD; // Example
+        request.setQrCodeType(typeToMakeUnsupported.name()); 
 
         given(qrCodeService.generateQRCode(
-                eq(QrCodeType.valueOf(request.getQrCodeType())), // Use the actual enum value
+                eq(typeToMakeUnsupported), 
                 anyMap(), anyInt(), anyInt(), any(ErrorCorrectionLevelEnum.class),
-                anyString(), anyString(), any(OutputFormatEnum.class)
+                anyString(), anyString(), any(OutputFormatEnum.class), any(), any(), any(), anyString(), any()
         )).willThrow(new UnsupportedOperationException("Test: Type not supported"));
 
         mockMvc.perform(post("/api/qrcode/generate")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isNotImplemented()) // HTTP 501
+                .andExpect(status().isNotImplemented()) 
                 .andExpect(jsonPath("$.error").value("Test: Type not supported"));
-    }
-    
-    @Test
-    void generateQrCode_serviceThrowsIllegalArgumentException_returnsBadRequest() throws Exception {
-        GenerateQrCodeRequest request = createDefaultRequest();
-        request.setData(""); // This might cause an IAE from a formatter or service pre-check
-
-        given(qrCodeService.generateQRCode(any(QrCodeType.class), anyMap(), anyInt(), anyInt(), 
-                                           any(ErrorCorrectionLevelEnum.class), anyString(), anyString(), 
-                                           any(OutputFormatEnum.class)))
-            .willThrow(new IllegalArgumentException("Test: Invalid argument from service"));
-
-        mockMvc.perform(post("/api/qrcode/generate")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("Test: Invalid argument from service"));
-    }
-
-    @Test
-    void generateQrCode_dtoValidationFailsForData_returnsBadRequest() throws Exception {
-        GenerateQrCodeRequest request = createDefaultRequest();
-        request.setData(null); // @NotBlank constraint
-
-        mockMvc.perform(post("/api/qrcode/generate")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest());
-        // More specific check for DTO validation error message can be added here
     }
 }

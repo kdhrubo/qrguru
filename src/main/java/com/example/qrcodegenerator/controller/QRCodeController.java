@@ -69,12 +69,19 @@ public class QRCodeController {
                     errorCorrectionLevel,
                     request.getForegroundColor(),
                     request.getBackgroundColor(),
-                    outputFormat // Pass OutputFormatEnum to service
+                    outputFormat,
+                    request.getLogoBase64(),
+                    request.getLogoTargetAreaFactor(),
+                    request.getFrameText(),
+                    request.getFrameColor(),
+                    request.getFramePadding()
             );
 
             MediaType contentType = MediaType.IMAGE_PNG; // Default
             if (outputFormat == OutputFormatEnum.SVG) {
                 contentType = MediaType.valueOf("image/svg+xml");
+            } else if (outputFormat == OutputFormatEnum.EPS) {
+                contentType = MediaType.valueOf("application/postscript");
             }
 
             return ResponseEntity.ok()

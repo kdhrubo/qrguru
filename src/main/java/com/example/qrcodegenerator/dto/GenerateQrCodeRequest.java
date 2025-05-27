@@ -45,6 +45,19 @@ public class GenerateQrCodeRequest {
 
     private String outputFormat = "PNG"; // Default to PNG
 
+    private String logoBase64; // Nullable, no default
+
+    @jakarta.validation.constraints.Min(value = 0.1, message = "logoTargetAreaFactor must be at least 0.1 (10%)")
+    @jakarta.validation.constraints.Max(value = 0.3, message = "logoTargetAreaFactor must be at most 0.3 (30%)")
+    private Double logoTargetAreaFactor = 0.20; // Default to 20%
+
+    private String frameText; // Nullable, for text in the frame
+
+    @jakarta.validation.constraints.Pattern(regexp = "^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$", message = "Invalid hex color format for frameColor. Use #RRGGBB or #RGB.")
+    private String frameColor = "#000000"; // Default black
+
+    private Integer framePadding; // Nullable. If set, e.g. to 10, it means 10 units/pixels of padding.
+
     // Custom constructor or setters can be added if specific logic is needed
     // for initializing params from data, etc.
 }

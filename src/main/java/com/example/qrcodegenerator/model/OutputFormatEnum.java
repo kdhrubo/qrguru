@@ -2,7 +2,8 @@ package com.example.qrcodegenerator.model;
 
 public enum OutputFormatEnum {
     PNG,
-    SVG;
+    SVG,
+    EPS; // Added EPS
 
     /**
      * Converts a string to the corresponding OutputFormatEnum.
